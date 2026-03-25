@@ -20,6 +20,23 @@ time.sleep(3)
 dados = []
 pagina_atual = 1
 
+# Verifica se existe arquivo parcial para continuar
+import os
+if os.path.exists("os_extraidas.xlsx"):
+    try:
+        df_existente = pd.read_excel("os_extraidas.xlsx")
+        dados = df_existente.values.tolist()
+        print(f"Carregados {len(dados)} registros do arquivo existente.")
+        
+        # Tenta determinar a última página processada
+        if os.path.exists("ultima_pagina.txt"):
+            with open("ultima_pagina.txt", "r") as f:
+                pagina_atual = int(f.read()) + 1
+            print(f"Continuando da página {pagina_atual}...")
+    except Exception as e:
+        print(f"Erro ao carregar arquivo existente: {e}")
+        print("Iniciando do início...")
+
 while True:
     print(f"Processando página {pagina_atual}...")
     
@@ -86,9 +103,9 @@ while True:
         
         for selector in selectors:
             try:
-                next_button = driver.find_element(By.XPATH, selector)
-                if next_button and next_button.is_enabled():
-                    break
+                wait = WebDriverWait(driver, 10)
+                next_button = wait.until(EC.element_to_be_clickable((By.XPATH, selector)))
+                break
             except:
                 continue
         
@@ -106,15 +123,42 @@ while True:
         if next_button and next_button.is_enabled():
             next_button.click()
             time.sleep(2)  # Espera a página carregar
+            
+            # Salva o progresso a cada 10 páginas
+            if pagina_atual % 10 == 0:
+                df_progresso = pd.DataFrame(dados, columns=[
+                    "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
+                ])
+                df_progresso.to_excel("os_extraidas.xlsx", index=False)
+                with open("ultima_pagina.txt", "w") as f:
+                    f.write(str(pagina_atual))
+                print(f"Progresso salvo: página {pagina_atual}")
+            
             pagina_atual += 1
         else:
             print("Não há mais páginas para navegar.")
             break
             
     except Exception as e:
-        print(f"Erro na navegação: {e}")
-        print("Finalizando coleta de dados.")
-        break
+        print(f"Erro na navegação (página {pagina_atual}): {e}")
+        print("Tentando continuar...")
+        
+        # Tenta salvar dados coletados até agora
+        if dados:
+            df_parcial = pd.DataFrame(dados, columns=[
+                "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
+            ])
+            df_parcial.to_excel(f"os_parcial_pagina_{pagina_atual}.xlsx", index=False)
+            print(f"Dados parciais salvos em 'os_parcial_pagina_{pagina_atual}.xlsx'")
+        
+        # Tenta recarregar a página e continuar
+        try:
+            driver.refresh()
+            time.sleep(3)
+            continue
+        except:
+            print("Não foi possível recuperar. Finalizando.")
+            break
 
 df = pd.DataFrame(dados, columns=[
     "OS",
