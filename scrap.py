@@ -63,15 +63,57 @@ def extrair_texto(elemento):
     except Exception as e:
         return ""
 
-def salvar(dados, pagina, arquivo="os_extraidas.xlsx"):
+def detectar_cabecalhos(driver, tabela):
+    """Detecta os cabeçalhos da tabela dinamicamente"""
+    cabecalhos = []
+    try:
+        # Tenta encontrar th elements primeiro
+        ths = tabela.find_elements(By.TAG_NAME, "th")
+        if ths:
+            cabecalhos = [extrair_texto(th) for th in ths]
+            # Remove cabeçalhos vazios no início/fim comuns em tabelas com checkboxes
+            while cabecalhos and not cabecalhos[0]:
+                cabecalhos.pop(0)
+            # Filtra cabeçalhos vazios restantes
+            cabecalhos = [h if h else f"Col_{i}" for i, h in enumerate(cabecalhos)]
+            return cabecalhos
+        
+        # Se não encontrou th, tenta primeira linha como cabeçalho
+        primeira_linha = tabela.find_element(By.CSS_SELECTOR, "tr")
+        if primeira_linha:
+            tds = primeira_linha.find_elements(By.TAG_NAME, "td")
+            if tds:
+                cabecalhos = [extrair_texto(td) for td in tds]
+                while cabecalhos and not cabecalhos[0]:
+                    cabecalhos.pop(0)
+                cabecalhos = [h if h else f"Col_{i}" for i, h in enumerate(cabecalhos)]
+                return cabecalhos
+    except Exception as e:
+        print(f"Erro ao detectar cabeçalhos: {e}")
+    
+    # Fallback: retorna colunas genéricas
+    return []
+
+def extrair_dados_linha(linha):
+    """Extrai todos os dados de uma linha da tabela"""
+    try:
+        colunas = linha.find_elements(By.TAG_NAME, "td")
+        if not colunas:
+            return []
+        dados = [extrair_texto(col) for col in colunas]
+        return dados
+    except:
+        return []
+
+def salvar(dados, colunas, pagina, arquivo="os_extraidas.xlsx"):
     if not dados:
         return
     try:
-        df = pd.DataFrame(dados, columns=["OS", "Cliente", "Vendedor", "Data Abertura", "Equipamento", "OBS"])
+        df = pd.DataFrame(dados, columns=colunas)
         df.to_excel(arquivo, index=False)
         with open("ultima_pagina.txt", "w") as f:
             f.write(str(pagina))
-        print(f"Salvo: {len(dados)} registros (página {pagina})")
+        print(f"Salvo: {len(dados)} registros, {len(colunas)} colunas (página {pagina})")
     except Exception as e:
         print(f"Erro ao salvar: {e}")
 
@@ -122,13 +164,16 @@ def detectar_pagina(driver):
 
 # Carrega dados existentes se houver
 dados = []
+cabecalhos = []
 pagina_atual = 1
 
 if os.path.exists("os_extraidas.xlsx"):
     try:
         df = pd.read_excel("os_extraidas.xlsx")
+        cabecalhos = df.columns.tolist()
         dados = df.values.tolist()
         print(f"Carregados {len(dados)} registros existentes.")
+        print(f"Colunas detectadas: {cabecalhos}")
         if os.path.exists("ultima_pagina.txt"):
             with open("ultima_pagina.txt", "r") as f:
                 pagina_atual = int(f.read().strip()) + 1
@@ -148,57 +193,60 @@ while True:
         wait = WebDriverWait(driver, 10)
         tabela = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
 
-        # Pega todas as linhas (pulando cabeçalho)
+        # Detecta cabeçalhos dinamicamente (apenas na primeira página ou se ainda não definidos)
+        if not cabecalhos or pagina_atual == 1:
+            cabecalhos = detectar_cabecalhos(driver, tabela)
+            if cabecalhos:
+                print(f"Cabeçalhos detectados: {cabecalhos}")
+            else:
+                # Fallback para nomes genéricos se não conseguir detectar
+                # Vai detectar na primeira linha de dados
+                pass
+
+        # Pega todas as linhas de dados (pulando cabeçalho)
         linhas = driver.find_elements(By.CSS_SELECTOR, "table tbody tr, table tr")
-        print(f"Encontradas {len(linhas)-1} linhas de dados")
+        
+        # Identifica onde começam os dados (pula th ou primeira linha de cabeçalho)
+        linhas_dados = []
+        for linha in linhas:
+            tds = linha.find_elements(By.TAG_NAME, "td")
+            if len(tds) > 0:
+                linhas_dados.append(linha)
+        
+        print(f"Encontradas {len(linhas_dados)} linhas de dados")
 
         registros = 0
-        for linha in linhas[1:]:  # Pula cabeçalho
+        for linha in linhas_dados:
             if verificar_esc():
                 break
 
-            colunas = linha.find_elements(By.TAG_NAME, "td")
-            num_cols = len(colunas)
+            valores = extrair_dados_linha(linha)
             
-            # Debug: mostra quantidade de colunas na primeira linha
-            if registros == 0 and num_cols > 0:
-                print(f"  Colunas detectadas: {num_cols}")
+            # Se ainda não temos cabeçalhos, usa nomes genéricos baseados na primeira linha
+            if not cabecalhos and valores:
+                cabecalhos = [f"Col_{i}" for i in range(len(valores))]
+                print(f"Cabeçalhos genéricos criados: {len(cabecalhos)} colunas")
             
-            if num_cols >= 6:
-                try:
-                    # Extrai dados conforme estrutura da imagem
-                    # Índices podem variar - ajuste conforme necessário
-                    os_num = extrair_texto(colunas[1]) if num_cols > 1 else ""
-                    cliente = extrair_texto(colunas[2]) if num_cols > 2 else ""
-                    vendedor = extrair_texto(colunas[3]) if num_cols > 3 else ""
-                    data_abertura = extrair_texto(colunas[4]) if num_cols > 4 else ""
+            # Verifica se a linha tem dados válidos (não está vazia)
+            if valores and any(v for v in valores if v.strip()):
+                # Garante que temos o número correto de colunas
+                if len(valores) == len(cabecalhos):
+                    dados.append(valores)
+                    registros += 1
+                elif len(valores) > 0:
+                    # Ajusta para cabeçalhos existentes (preenche ou trunca)
+                    valores_ajustados = valores[:len(cabecalhos)] if len(valores) > len(cabecalhos) else valores + [""] * (len(cabecalhos) - len(valores))
+                    dados.append(valores_ajustados)
+                    registros += 1
                     
-                    # Equipamento e OBS podem estar em índices diferentes
-                    equipamento = ""
-                    obs = ""
-                    
-                    if num_cols > 5:
-                        equipamento = extrair_texto(colunas[5])
-                    if num_cols > 6:
-                        obs = extrair_texto(colunas[6])
-                    
-                    # Se equipamento ou OBS estiverem vazios, tenta índices alternativos
-                    if not equipamento and num_cols > 7:
-                        equipamento = extrair_texto(colunas[6])
-                        obs = extrair_texto(colunas[7]) if num_cols > 7 else ""
-
-                    if os_num and os_num.isdigit():
-                        dados.append([os_num, cliente, vendedor, data_abertura, equipamento, obs])
-                        registros += 1
-                        
-                        # Debug: mostra primeiro registro detalhado
-                        if registros == 1:
-                            print(f"  Exemplo: OS={os_num}, Cliente={cliente[:20]}, Equip={equipamento[:30]}")
-                except Exception as e:
-                    continue
+                # Debug: mostra primeiro registro detalhado
+                if registros == 1:
+                    amostra = ", ".join([f"{cabecalhos[i]}={valores[i][:20] if i < len(valores) else 'N/A'}" for i in range(min(3, len(cabecalhos)))])
+                    print(f"  Exemplo: {amostra}")
 
         print(f"Extraídos {registros} registros")
-        salvar(dados, pagina_atual)
+        if cabecalhos:
+            salvar(dados, cabecalhos, pagina_atual)
 
         if encerrar_solicitado:
             break
@@ -246,7 +294,11 @@ while True:
 # Salvamento final (único arquivo)
 print(f"\n{'='*50}")
 print(f"Total de registros extraídos: {len(dados)}")
-salvar(dados, pagina_atual, "os_extraidas.xlsx")
+if cabecalhos:
+    print(f"Colunas: {', '.join(cabecalhos)}")
+    salvar(dados, cabecalhos, pagina_atual, "os_extraidas.xlsx")
+else:
+    print("Nenhuma coluna detectada - nada para salvar")
 print("Processo finalizado.")
 
 driver.quit()
