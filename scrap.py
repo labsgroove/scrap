@@ -8,6 +8,7 @@ import time
 import re
 import os
 import keyboard
+import pyautogui
 
 # Configuração do driver
 options = Options()
@@ -19,6 +20,44 @@ print("Pressione ESC para encerrar e salvar.")
 time.sleep(2)
 
 encerrar_solicitado = False
+
+def scroll_ate_o_fim(driver):
+    """Rola a tela até o fim da página gradualmente"""
+    try:
+        altura_total = driver.execute_script("return document.body.scrollHeight")
+        altura_atual = 0
+        passo = 500
+        
+        while altura_atual < altura_total:
+            if verificar_esc():
+                break
+            altura_atual += passo
+            driver.execute_script(f"window.scrollTo(0, {altura_atual});")
+            time.sleep(0.3)
+            
+            # Atualiza altura total caso a página tenha carregado mais conteúdo
+            nova_altura = driver.execute_script("return document.body.scrollHeight")
+            if nova_altura > altura_total:
+                altura_total = nova_altura
+                
+        # Scroll final para garantir que chegou ao fim
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(0.5)
+    except Exception as e:
+        print(f"Erro ao rolar página: {e}")
+
+def clicar_proxima_pagina():
+    """Clica na posição atual do mouse para avançar a página"""
+    try:
+        # Pega a posição atual do mouse
+        x, y = pyautogui.position()
+        print(f"Clicando na posição do mouse: ({x}, {y})")
+        pyautogui.click(x, y)
+        time.sleep(1)
+        return True
+    except Exception as e:
+        print(f"Erro ao clicar: {e}")
+        return False
 
 def verificar_esc():
     global encerrar_solicitado
@@ -198,6 +237,11 @@ while True:
                     continue
 
         print(f"Extraídos {registros} registros")
+        
+        # Rola até o fim da página para processar todo o conteúdo
+        print("Rolando até o fim da página...")
+        scroll_ate_o_fim(driver)
+        
         salvar(dados, pagina_atual)
 
         if encerrar_solicitado:
@@ -212,12 +256,20 @@ while True:
                 print("Última página alcançada.")
                 break
 
-        # Aguarda avanço manual
-        print("Aguardando avanço manual (ou ESC para sair)...")
+        # Clica na posição do mouse para avançar para a próxima página
+        print("Clique no botão 'Próxima página' e deixe o mouse parado sobre ele...")
+        print("Aguardando 1 segundos...")
+        time.sleep(1)
+        clicar_proxima_pagina()
+        
+        # Aguarda avanço da página
+        print("Aguardando carregamento da próxima página...")
         pagina_anterior = pagina_atual
         tentativas = 0
+        max_tentativas = 15  # Timeout de 15 segundos
+        pagina_mudou = False
 
-        while True:
+        while tentativas < max_tentativas:
             if verificar_esc():
                 break
 
@@ -229,11 +281,28 @@ while True:
             if nova_pagina and nova_pagina != pagina_anterior:
                 pagina_atual = nova_pagina
                 print(f"Página avançada para {pagina_atual}")
+                pagina_mudou = True
                 break
 
-            # Mostra status a cada 10s
-            if tentativas % 10 == 0:
+            # Mostra status a cada 5s
+            if tentativas % 5 == 0:
                 print(f"  Aguardando... ({tentativas}s)")
+
+        if not pagina_mudou:
+            print("AVISO: Página não mudou. Tentando clicar novamente...")
+            # Tenta clicar mais uma vez
+            clicar_proxima_pagina()
+            time.sleep(2)
+            
+            # Verifica novamente
+            nova_pagina, _ = detectar_pagina(driver)
+            if nova_pagina and nova_pagina != pagina_anterior:
+                pagina_atual = nova_pagina
+                print(f"Página avançada para {pagina_atual} (2ª tentativa)")
+            else:
+                print("ERRO: Não foi possível avançar para a próxima página.")
+                print("Verifique se o mouse está posicionado corretamente sobre o botão.")
+                break
 
         if encerrar_solicitado:
             break
