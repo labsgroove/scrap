@@ -67,7 +67,7 @@ def salvar(dados, pagina, arquivo="os_extraidas.xlsx"):
     if not dados:
         return
     try:
-        df = pd.DataFrame(dados, columns=["OS", "Cliente", "Vendedor", "Data Abertura", "Equipamento", "OBS"])
+        df = pd.DataFrame(dados, columns=["OS", "Cliente", "Vendedor", "Data Abertura", "Status", "Equipamento", "OBS"])
         df.to_excel(arquivo, index=False)
         with open("ultima_pagina.txt", "w") as f:
             f.write(str(pagina))
@@ -160,40 +160,40 @@ while True:
             colunas = linha.find_elements(By.TAG_NAME, "td")
             num_cols = len(colunas)
             
-            # Debug: mostra quantidade de colunas na primeira linha
+            # Debug: mostra todas as colunas da primeira linha
             if registros == 0 and num_cols > 0:
-                print(f"  Colunas detectadas: {num_cols}")
+                print(f"  Total de colunas detectadas: {num_cols}")
+                for i, col in enumerate(colunas[:10]):  # Mostra até 10 colunas
+                    texto = extrair_texto(col)
+                    print(f"    [{i}]: {texto[:40]}")
             
             if num_cols >= 6:
                 try:
-                    # Extrai dados conforme estrutura da imagem
-                    # Índices podem variar - ajuste conforme necessário
+                    # Extrai dados conforme estrutura: N° OS, Cliente, Vendedor, Data abertura, Status, Equipamento, OBS
                     os_num = extrair_texto(colunas[1]) if num_cols > 1 else ""
                     cliente = extrair_texto(colunas[2]) if num_cols > 2 else ""
                     vendedor = extrair_texto(colunas[3]) if num_cols > 3 else ""
                     data_abertura = extrair_texto(colunas[4]) if num_cols > 4 else ""
+                    status = extrair_texto(colunas[5]) if num_cols > 5 else ""
                     
-                    # Equipamento e OBS podem estar em índices diferentes
-                    equipamento = ""
-                    obs = ""
-                    
-                    if num_cols > 5:
-                        equipamento = extrair_texto(colunas[5])
-                    if num_cols > 6:
-                        obs = extrair_texto(colunas[6])
-                    
-                    # Se equipamento ou OBS estiverem vazios, tenta índices alternativos
-                    if not equipamento and num_cols > 7:
-                        equipamento = extrair_texto(colunas[6])
-                        obs = extrair_texto(colunas[7]) if num_cols > 7 else ""
+                    # Equipamento e OBS nos índices corretos
+                    equipamento = extrair_texto(colunas[6]) if num_cols > 6 else ""
+                    obs = extrair_texto(colunas[7]) if num_cols > 7 else ""
 
                     if os_num and os_num.isdigit():
-                        dados.append([os_num, cliente, vendedor, data_abertura, equipamento, obs])
+                        dados.append([os_num, cliente, vendedor, data_abertura, status, equipamento, obs])
                         registros += 1
                         
                         # Debug: mostra primeiro registro detalhado
                         if registros == 1:
-                            print(f"  Exemplo: OS={os_num}, Cliente={cliente[:20]}, Equip={equipamento[:30]}")
+                            print(f"  Exemplo extraído:")
+                            print(f"    OS={os_num}")
+                            print(f"    Cliente={cliente[:30]}")
+                            print(f"    Vendedor={vendedor[:20]}")
+                            print(f"    Data={data_abertura}")
+                            print(f"    Status={status}")
+                            print(f"    Equip={equipamento[:30]}")
+                            print(f"    OBS={obs[:30]}")
                 except Exception as e:
                     continue
 
