@@ -1,101 +1,107 @@
-venv\Scripts\activate
-python -m venv
+# Scraper de Ordens de Serviço
 
-### Python 3.7+
+Sistema profissional de web scraping com retentativas automáticas, validação de dados e múltiplos formatos de exportação.
 
-### Navegador Chrome
-- Google Chrome instalado
-- ChromeDriver compatível com sua versão do Chrome
+## Funcionalidades
 
-### Bibliotecas Python
-
-Instale as dependências com:
-```bash
-pip install selenium pandas openpyxl
-```
+- **Robustez**: Retentativas automáticas com backoff exponencial
+- **Validação**: Modelos Pydantic para garantir integridade dos dados
+- **Performance**: Modo headless, otimizações de memória
+- **Múltiplos formatos**: Excel, CSV, JSON, SQLite
+- **CLI profissional**: Argumentos de linha de comando completos
+- **Checkpoint**: Continua de onde parou
+- **Logging estruturado**: Logs detalhados com níveis
 
 ## Instalação
 
-1. Clone ou baixe este repositório:
-```bash
-git clone <URL-DO-REPOSITORIO>
-cd scrap
-```
-
-2. Instale as dependências:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Baixe o ChromeDriver:
-   - Verifique sua versão do Chrome: `chrome://version/`
-   - Baixe o ChromeDriver correspondente de: https://chromedriver.chromium.org/
-   - Adicione o ChromeDriver ao PATH do seu sistema ou coloque-o na mesma pasta do script
+## Uso
 
-## Como Usar
+### Modo interativo (com Edge/Chrome aberto):
+```bash
+python main.py
+```
 
-1. **Inicie o Chrome em modo debug:**
-   - Windows:
-     ```bash
-     chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\temp\chrome_debug"
-     ```
-     "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --user-data-dir="C:\edge-debug"
-     
-   - Linux/Mac:
-     ```bash
-     google-chrome --remote-debugging-port=9222 --user-data-dir="/tmp/chrome_debug"
-     ```
+### Modo headless (sem interface):
+```bash
+python main.py --headless
+```
 
-2. **Navegue até a página desejada** no Chrome aberto e carregue completamente a tabela que deseja extrair.
+### Continuar de onde parou:
+```bash
+python main.py --resume
+```
 
-3. **Execute o script:**
-   ```bash
-   python scrap.py
-   ```
+### Exportar múltiplos formatos:
+```bash
+python main.py --format all --output-dir ./dados
+```
 
-4. **Aguarde o prompt** e pressione ENTER quando a página estiver totalmente carregada.
+### Com configurações personalizadas:
+```bash
+python main.py --start-page 5 --timeout 15 --max-retries 5 -v
+```
 
-5. O script irá extrair os dados e criar o arquivo `os_extraidas.xlsx` no mesmo diretório.
+## Opções do CLI
 
-## Estrutura do Script
+| Opção | Descrição | Padrão |
+|-------|-----------|--------|
+| `--headless` | Modo sem interface | `False` |
+| `--start-page N` | Começa da página N | `1` |
+| `--resume` | Continua do checkpoint | `False` |
+| `--output FILE` | Nome do arquivo de saída | `os_extraidas.xlsx` |
+| `--format FMT` | Formato: excel/csv/json/sqlite/all | `excel` |
+| `--timeout N` | Timeout em segundos | `10` |
+| `--max-retries N` | Máximo de retentativas | `3` |
+| `-v, --verbose` | Modo debug | `False` |
+| `--log-file FILE` | Salvar logs em arquivo | - |
 
-- **Conexão:** Conecta-se à sessão existente do Chrome via porta 9222
-- **Extração:** Identifica todas as linhas da tabela e extrai os dados das colunas
-- **Processamento:** Organiza os dados em um DataFrame pandas
-- **Exportação:** Salva os dados em formato Excel
+## Estrutura do Projeto
+
+```
+scrap/
+├── main.py          # CLI e entrada principal
+├── scraper.py       # Lógica de scraping com retries
+├── models.py        # Modelos Pydantic e configurações
+├── exporter.py      # Exportação para múltiplos formatos
+└── scrap.py         # Script original (legado)
+```
+
+## Como Funciona
+
+1. **Conexão**: Conecta ao Edge/Chrome via debugger ou cria nova instância headless
+2. **Extração**: Identifica tabela e extrai dados com múltiplas estratégias de fallback
+3. **Validação**: Valida cada registro com Pydantic
+4. **Retentativas**: Em caso de erro, tenta novamente com backoff exponencial
+5. **Exportação**: Salva nos formatos solicitados
+6. **Checkpoint**: Salva última página processada
+
+## Tratamento de Erros
+
+O sistema possui 3 níveis de proteção:
+
+- **Retry automático**: TimeoutException, WebDriverException (3 tentativas)
+- **Stale element**: Recaptura elementos obsoletos automaticamente
+- **Validação**: Descarta registros inválidos sem parar o processo
 
 ## Arquivos Gerados
 
-- `os_extraidas.xlsx`: Planilha com os dados extraídos da tabela
+- `os_extraidas.xlsx` - Dados principais (Excel)
+- `os_extraidas.csv` - Dados em CSV
+- `os_extraidas.json` - Dados em JSON
+- `os_extraidas.db` - Banco SQLite
+- `ultima_pagina.txt` - Checkpoint para resume
+- `report.txt` - Relatório do processamento
 
-## Personalização
+## Requisitos
 
-Para adaptar o script a outras tabelas:
-
-1. Modifique os seletores CSS na linha 18
-2. Ajuste os índices das colunas nas linhas 27-33
-3. Altere os nomes das colunas nas linhas 47-55
-
-## Solução de Problemas
-
-### ChromeDriver não encontrado
-- Verifique se o ChromeDriver está no PATH
-- Ou especifique o caminho no código: `driver = webdriver.Chrome(executable_path='caminho/para/chromedriver', options=options)`
-
-### Conexão recusada
-- Certifique-se de que o Chrome está rodando com a flag `--remote-debugging-port=9222`
-- Verifique se a porta 9222 não está sendo usada por outro processo
-
-### Tabela não encontrada
-- Verifique se o seletor CSS `"table tr"` corresponde à estrutura da página
-- Use as ferramentas de desenvolvedor do Chrome para inspecionar a tabela
-
-## Dependências
-
-- `selenium`: Automação do navegador
-- `pandas`: Manipulação de dados
-- `openpyxl`: Manipulação de arquivos Excel
+- Python 3.8+
+- Microsoft Edge ou Google Chrome
+- EdgeDriver/ChromeDriver (se não usar modo debugger)
 
 ## Licença
 
-Este projeto está sob licença MIT.
+MIT
