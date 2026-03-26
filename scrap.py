@@ -61,38 +61,35 @@ def inspecionar_paginacao(driver):
     
     return pagination_candidates
 
-def tentar_navegacao_por_texto(driver, target_text):
-    """Tenta navegar procurando pelo texto exato"""
+def tentar_navegacao_por_classe(driver, target_text):
+    """Tenta navegar procurando pela classe linklist"""
     try:
-        # Tenta vários métodos para encontrar o elemento
-        methods = [
-            lambda: driver.find_element(By.LINK_TEXT, target_text),
-            lambda: driver.find_element(By.PARTIAL_LINK_TEXT, target_text),
-            lambda: driver.find_element(By.XPATH, f"//*[text()='{target_text}']"),
-            lambda: driver.find_element(By.XPATH, f"//*[contains(text(), '{target_text}')]"),
-        ]
+        # Procura especificamente pelos elementos com classe linklist
+        elements = driver.find_elements(By.CLASS_NAME, "linklist")
         
-        for method in methods:
+        for element in elements:
             try:
-                element = method()
-                if element.is_displayed() and element.is_enabled():
-                    print(f"Clicando em '{target_text}' usando método {method.__name__}")
+                text = element.text.strip()
+                if text == target_text and element.is_displayed() and element.is_enabled():
+                    print(f"Clicando em '{target_text}' com classe linklist")
                     element.click()
                     return True
             except:
                 continue
+                
+        # Tenta JavaScript nos elementos linklist
+        for element in elements:
+            try:
+                text = element.text.strip()
+                if text == target_text:
+                    print(f"Clicando em '{target_text}' com JavaScript (linklist)")
+                    driver.execute_script("arguments[0].click();", element)
+                    return True
+            except:
+                continue
         
-        # Tenta JavaScript
-        try:
-            element = driver.find_element(By.XPATH, f"//*[contains(text(), '{target_text}')]")
-            driver.execute_script("arguments[0].click();", element)
-            print(f"Clicando em '{target_text}' com JavaScript")
-            return True
-        except:
-            pass
-            
     except Exception as e:
-        print(f"Erro ao tentar clicar em '{target_text}': {e}")
+        print(f"Erro ao tentar navegação por classe: {e}")
     
     return False
 
@@ -119,6 +116,13 @@ if os.path.exists("os_extraidas.xlsx"):
 if pagina_atual == 1:
     inspecionar_paginacao(driver)
     print("\n" + "="*50 + "\n")
+else:
+    # Nas outras páginas, só verifica se há elementos linklist
+    try:
+        linklist_elements = driver.find_elements(By.CLASS_NAME, "linklist")
+        print(f"Encontrados {len(linklist_elements)} elementos com classe 'linklist'")
+    except:
+        pass
 
 while True:
     print(f"Processando página {pagina_atual}...")
@@ -188,27 +192,19 @@ while True:
                 print("Última página alcançada. Finalizando.")
                 break
         
-        # Tenta navegação usando os candidatos encontrados
-        candidates = inspecionar_paginacao(driver)
-        
+        # Tenta navegação direta (sem inspecionar toda a página)
         navegacao_sucesso = False
         
         # Tenta diferentes estratégias
         strategies = [
-            # 1. Procura por setas
-            lambda: tentar_navegacao_por_texto(driver, '»'),
-            lambda: tentar_navegacao_por_texto(driver, '›'),
-            lambda: tentar_navegacao_por_texto(driver, '>'),
-            lambda: tentar_navegacao_por_texto(driver, '→'),
+            # 1. Procura pelo número da próxima página (prioridade)
+            lambda: tentar_navegacao_por_classe(driver, str(pagina_atual + 1)),
             
-            # 2. Procura por texto "próxima"
-            lambda: tentar_navegacao_por_texto(driver, 'Próxima'),
-            lambda: tentar_navegacao_por_texto(driver, 'próxima'),
-            lambda: tentar_navegacao_por_texto(driver, 'Next'),
-            lambda: tentar_navegacao_por_texto(driver, 'next'),
-            
-            # 3. Procura pelo número da próxima página
-            lambda: tentar_navegacao_por_texto(driver, str(pagina_atual + 1)),
+            # 2. Procura por setas se não houver número
+            lambda: tentar_navegacao_por_classe(driver, '»'),
+            lambda: tentar_navegacao_por_classe(driver, '›'),
+            lambda: tentar_navegacao_por_classe(driver, '>'),
+            lambda: tentar_navegacao_por_classe(driver, '→'),
         ]
         
         for strategy in strategies:
@@ -218,19 +214,34 @@ while True:
                 break
         
         if navegacao_sucesso:
-            # Verifica se realmente mudou de página
-            try:
-                new_page_info = driver.find_element(By.XPATH, "//*[contains(text(), 'Página (')]")
-                new_page_text = new_page_info.text
-                new_match = re.search(r'Página \((\d+)/(\d+)\)', new_page_text)
-                if new_match:
-                    current_page = int(new_match.group(1))
-                    print(f"Verificação: página atual é {current_page}")
-                    if current_page <= pagina_atual:
-                        print("ERRO: Página não avançou! Tentando novamente...")
+            # Espera a página carregar completamente
+            time.sleep(3)
+            
+            # Tenta várias vezes verificar se mudou de página
+            pagina_mudou = False
+            for tentativa in range(3):
+                try:
+                    new_page_info = driver.find_element(By.XPATH, "//*[contains(text(), 'Página (')]")
+                    new_page_text = new_page_info.text
+                    new_match = re.search(r'Página \((\d+)/(\d+)\)', new_page_text)
+                    if new_match:
+                        current_page = int(new_match.group(1))
+                        print(f"Verificação {tentativa + 1}: página atual é {current_page}")
+                        if current_page > pagina_atual:
+                            print(f"Sucesso! Avançou para página {current_page}")
+                            pagina_mudou = True
+                            break
+                        elif tentativa < 2:
+                            print(f"Aguardando mais um pouco... (tentativa {tentativa + 1}/3)")
+                            time.sleep(2)
+                except:
+                    if tentativa < 2:
+                        time.sleep(2)
                         continue
-            except:
-                print("Não foi possível verificar se a página avançou")
+            
+            if not pagina_mudou:
+                print("ERRO: Página não avançou após várias tentativas! Tentando novamente...")
+                continue
             
             # Salva o progresso a cada 5 páginas
             if pagina_atual % 5 == 0:
