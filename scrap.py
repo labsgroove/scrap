@@ -7,6 +7,9 @@ import pandas as pd
 import time
 import re
 import os
+import keyboard
+import threading
+import sys
 
 options = Options()
 options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
@@ -14,8 +17,141 @@ options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
 driver = webdriver.Edge(options=options)
 
 print("Conectado com sucesso!")
+print("Pressione ESC a qualquer momento para encerrar e salvar.")
 
 time.sleep(3)
+
+# Flag global para controle de encerramento
+encerrar_solicitado = False
+
+def verificar_tecla_esc():
+    """Verifica se ESC foi pressionado para encerrar"""
+    global encerrar_solicitado
+    if keyboard.is_pressed('esc'):
+        print("\n[ESC DETECTADO] Encerrando e salvando...")
+        encerrar_solicitado = True
+        return True
+    return False
+
+def aguardar_avanco_manual(driver, pagina_atual):
+    """
+    Aguarda o usuario avancar manualmente a pagina.
+    Detecta quando a pagina mudou comparando o numero da pagina atual.
+    Retorna True quando detectar que a pagina avancou.
+    """
+    print(f"\n{'='*60}")
+    print(f"AGUARDANDO AVANCO MANUAL PARA PAGINA {pagina_atual + 1}")
+    print(f"Pagina atual: {pagina_atual}")
+    print("- Avance manualmente a pagina no navegador")
+    print("- Ou pressione ESC para encerrar e salvar")
+    print(f"{'='*60}\n")
+    
+    tentativas = 0
+    
+    while True:
+        # Verifica se ESC foi pressionado
+        if verificar_tecla_esc():
+            return False
+        
+        # Verifica se a pagina mudou - tenta multiplos padroes
+        page_number = detectar_numero_pagina(driver, pagina_atual)
+        
+        if page_number and page_number != pagina_atual:
+            print(f"[DETECTOR] Pagina mudou de {pagina_atual} para {page_number}")
+            return True
+        
+        # Aguarda antes de verificar novamente
+        time.sleep(1)
+        tentativas += 1
+        
+        # Mostra mensagem de status a cada 10 segundos
+        if tentativas % 10 == 0:
+            print(f"[AGUARDANDO] {tentativas}s - Ainda na pagina {pagina_atual}")
+
+def detectar_numero_pagina(driver, pagina_esperada):
+    """
+    Tenta detectar o numero da pagina atual usando varias estrategias.
+    Retorna o numero da pagina ou None se nao encontrar.
+    """
+    # Padroes de busca para texto de paginacao (case-insensitive)
+    padroes_texto = [
+        "pagina (",
+        "pagina(", 
+        "página (",
+        "página(",
+        "page (",
+        "page(",
+        "pag (",
+        "pag("
+    ]
+    
+    # Tenta encontrar elemento com algum dos padroes
+    for padrao in padroes_texto:
+        try:
+            # Usa contains com translate para case-insensitive
+            xpath = f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ', 'abcdefghijklmnopqrstuvwxyzaaaaaaeeeeiiiiooooouuuu'), '{padrao}')]"
+            elementos = driver.find_elements(By.XPATH, xpath)
+            
+            for elem in elementos:
+                texto = elem.text.strip()
+                # Procura por padrao (X/Y) ou X de Y
+                match = re.search(r'[\(\s]?(\d+)[/\s](\d+)[\)\s]?', texto)
+                if match:
+                    return int(match.group(1))
+        except:
+            continue
+    
+    # Tenta buscar por elementos comuns de paginacao (classes, etc)
+    try:
+        # Procura por elementos que podem conter info de pagina
+        elementos_paginacao = driver.find_elements(By.CLASS_NAME, "pagination")
+        if not elementos_paginacao:
+            elementos_paginacao = driver.find_elements(By.CLASS_NAME, "paginacao")
+        if not elementos_paginacao:
+            elementos_paginacao = driver.find_elements(By.CLASS_NAME, "page-info")
+            
+        for elem in elementos_paginacao:
+            texto = elem.text.strip()
+            match = re.search(r'(\d+)\s*[/de]\s*(\d+)', texto, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+    except:
+        pass
+    
+    return None
+
+def extrair_texto_celula(elemento):
+    """
+    Extrai texto de uma celula da tabela.
+    Garante que strings grandes sejam capturadas completamente.
+    """
+    try:
+        # Tenta pegar o texto direto
+        texto = elemento.text.strip()
+        
+        # Se o texto estiver vazio ou muito curto, tenta outros metodos
+        if len(texto) < 10:
+            # Tenta pegar o conteudo do atributo title (tooltip)
+            title = elemento.get_attribute("title")
+            if title:
+                texto = title.strip()
+        
+        # Se ainda estiver vazio, tenta pegar o innerHTML sem tags
+        if not texto:
+            html = elemento.get_attribute("innerHTML")
+            if html:
+                # Remove tags HTML
+                texto = re.sub(r'<[^>]+>', ' ', html).strip()
+        
+        # Substitui quebras de linha por espacos para manter em uma linha
+        texto = texto.replace('\n', ' ').replace('\r', ' ')
+        
+        # Remove espacos multiplos
+        texto = re.sub(r'\s+', ' ', texto)
+        
+        return texto
+    except Exception as e:
+        return ""
 
 def inspecionar_paginacao(driver):
     """Inspecciona todos os elementos que podem ser paginação"""
@@ -60,6 +196,24 @@ def inspecionar_paginacao(driver):
         print(f"  {i+1}. Texto: '{candidate['text']}' | Class: '{candidate['class']}' | Displayed: {candidate['displayed']} | Enabled: {candidate['enabled']}")
     
     return pagination_candidates
+
+def salvar_dados(dados, pagina_atual, nome_arquivo="os_extraidas.xlsx"):
+    """Salva os dados coletados em um arquivo Excel"""
+    if not dados:
+        print("Nenhum dado para salvar.")
+        return
+    
+    try:
+        df = pd.DataFrame(dados, columns=[
+            "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
+        ])
+        df.to_excel(nome_arquivo, index=False)
+        with open("ultima_pagina.txt", "w") as f:
+            f.write(str(pagina_atual))
+        print(f"\nDados salvos em '{nome_arquivo}' ({len(dados)} registros)")
+        print(f"Ultima pagina salva: {pagina_atual}")
+    except Exception as e:
+        print(f"Erro ao salvar dados: {e}")
 
 def tentar_navegacao_por_classe(driver, target_text):
     """Tenta navegar procurando pela classe linklist"""
@@ -125,6 +279,10 @@ else:
         pass
 
 while True:
+    # Verifica se ESC foi pressionado no inicio de cada pagina
+    if verificar_tecla_esc():
+        break
+    
     print(f"Processando página {pagina_atual}...")
     
     # Espera a tabela carregar completamente
@@ -139,27 +297,31 @@ while True:
         time.sleep(5)
         continue
     
-    # pega todas as linhas da tabela
+    # Pega todas as linhas da tabela
     rows = driver.find_elements(By.CSS_SELECTOR, "table tr")
     print(f"Encontradas {len(rows)} linhas na tabela")
     
     registros_pagina = 0
-    for i in range(1, len(rows)):  # Começa de 1 para pular o cabeçalho
+    for i in range(1, len(rows)):  # Comeca de 1 para pular o cabecalho
+        # Verifica ESC a cada linha processada
+        if verificar_tecla_esc():
+            break
+            
         row = rows[i]
         cols = row.find_elements(By.TAG_NAME, "td")
         
         if len(cols) >= 5:
             try:
-                # Extrai o número da OS (primeira coluna após o ícone)
-                numero_os = cols[1].text.strip()
-                cliente = cols[2].text.strip()
-                vendedor = cols[3].text.strip() if len(cols) > 3 else ""
-                data_abertura = cols[4].text.strip() if len(cols) > 4 else ""
-                defeito = cols[5].text.strip() if len(cols) > 5 else ""
-                equipamento = cols[6].text.strip() if len(cols) > 6 else ""
-                obs = cols[7].text.strip() if len(cols) > 7 else ""
+                # Extrai dados usando a funcao melhorada para strings grandes
+                numero_os = extrair_texto_celula(cols[1])
+                cliente = extrair_texto_celula(cols[2])
+                vendedor = extrair_texto_celula(cols[3]) if len(cols) > 3 else ""
+                data_abertura = extrair_texto_celula(cols[4]) if len(cols) > 4 else ""
+                defeito = extrair_texto_celula(cols[5]) if len(cols) > 5 else ""
+                equipamento = extrair_texto_celula(cols[6]) if len(cols) > 6 else ""
+                obs = extrair_texto_celula(cols[7]) if len(cols) > 7 else ""
 
-                if numero_os:  # Só adiciona se tiver número da OS
+                if numero_os:  # So adiciona se tiver numero da OS
                     dados.append([
                         numero_os,
                         cliente,
@@ -174,132 +336,55 @@ while True:
                 print(f"Erro ao processar linha {i}: {e}")
                 continue
     
-    print(f"Extraídos {registros_pagina} registros da página {pagina_atual}")
+    # Verifica se ESC foi pressionado durante o processamento
+    if encerrar_solicitado:
+        break
     
-    # Verifica se existe botão de próxima página
-    try:
-        # Procura pelo texto "Página (X/Y)" para saber o total de páginas
-        page_info = driver.find_element(By.XPATH, "//*[contains(text(), 'Página (')]")
-        page_text = page_info.text
+    print(f"Extraidos {registros_pagina} registros da pagina {pagina_atual}")
+    
+    # Salva o progresso apos cada pagina processada
+    salvar_dados(dados, pagina_atual, "os_extraidas.xlsx")
+    
+    # Detecta numero da pagina atual
+    current_page = detectar_numero_pagina(driver, pagina_atual)
+    
+    if current_page:
+        print(f"Pagina atual detectada: {current_page}")
         
-        # Extrai o número total de páginas usando regex
-        match = re.search(r'Página \(\d+/(\d+)\)', page_text)
-        if match:
-            total_pages = int(match.group(1))
-            print(f"Página atual: {pagina_atual}/{total_pages}")
-            
-            if pagina_atual >= total_pages:
-                print("Última página alcançada. Finalizando.")
-                break
-        
-        # Tenta navegação direta (sem inspecionar toda a página)
-        navegacao_sucesso = False
-        
-        # Tenta diferentes estratégias
-        strategies = [
-            # 1. Procura pelo número da próxima página (prioridade)
-            lambda: tentar_navegacao_por_classe(driver, str(pagina_atual + 1)),
-            
-            # 2. Procura por setas se não houver número
-            lambda: tentar_navegacao_por_classe(driver, '»'),
-            lambda: tentar_navegacao_por_classe(driver, '›'),
-            lambda: tentar_navegacao_por_classe(driver, '>'),
-            lambda: tentar_navegacao_por_classe(driver, '→'),
-        ]
-        
-        for strategy in strategies:
-            if strategy():
-                time.sleep(3)
-                navegacao_sucesso = True
-                break
-        
-        if navegacao_sucesso:
-            # Espera a página carregar completamente
-            time.sleep(3)
-            
-            # Tenta várias vezes verificar se mudou de página
-            pagina_mudou = False
-            for tentativa in range(3):
-                try:
-                    new_page_info = driver.find_element(By.XPATH, "//*[contains(text(), 'Página (')]")
-                    new_page_text = new_page_info.text
-                    new_match = re.search(r'Página \((\d+)/(\d+)\)', new_page_text)
-                    if new_match:
-                        current_page = int(new_match.group(1))
-                        print(f"Verificação {tentativa + 1}: página atual é {current_page}")
-                        if current_page > pagina_atual:
-                            print(f"Sucesso! Avançou para página {current_page}")
-                            pagina_mudou = True
-                            break
-                        elif tentativa < 2:
-                            print(f"Aguardando mais um pouco... (tentativa {tentativa + 1}/3)")
-                            time.sleep(2)
-                except:
-                    if tentativa < 2:
-                        time.sleep(2)
-                        continue
-            
-            if not pagina_mudou:
-                print("ERRO: Página não avançou após várias tentativas! Tentando novamente...")
-                continue
-            
-            # Salva o progresso a cada 5 páginas
-            if pagina_atual % 5 == 0:
-                df_progresso = pd.DataFrame(dados, columns=[
-                    "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
-                ])
-                df_progresso.to_excel("os_extraidas.xlsx", index=False)
-                with open("ultima_pagina.txt", "w") as f:
-                    f.write(str(pagina_atual))
-                print(f"Progresso salvo: página {pagina_atual}")
-            
-            pagina_atual += 1
-        else:
-            print("Não foi possível encontrar botão de navegação. Finalizando...")
-            # Tenta salvar os dados atuais antes de finalizar
-            if dados:
-                df_final = pd.DataFrame(dados, columns=[
-                    "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
-                ])
-                df_final.to_excel("os_extraidas_final.xlsx", index=False)
-                print("Dados finais salvos em 'os_extraidas_final.xlsx'")
-            break
-            
-    except Exception as e:
-        print(f"Erro na navegação (página {pagina_atual}): {e}")
-        print("Tentando continuar...")
-        
-        # Tenta salvar dados coletados até agora
-        if dados:
-            df_parcial = pd.DataFrame(dados, columns=[
-                "OS", "Cliente", "Vendedor", "Data Abertura", "Defeito", "Equipamento", "OBS"
-            ])
-            df_parcial.to_excel(f"os_parcial_pagina_{pagina_atual}.xlsx", index=False)
-            print(f"Dados parciais salvos em 'os_parcial_pagina_{pagina_atual}.xlsx'")
-        
-        # Tenta recarregar a página e continuar
+        # Verifica se e a ultima pagina (tenta detectar total)
         try:
-            driver.refresh()
-            time.sleep(3)
-            continue
+            page_info = driver.find_element(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ', 'abcdefghijklmnopqrstuvwxyzaaaaaaeeeeiiiiooooouuuu'), 'pagina')] | //*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ', 'abcdefghijklmnopqrstuvwxyzaaaaaaeeeeiiiiooooouuuu'), 'page')]")
+            texto = page_info.text
+            match = re.search(r'(\d+)\s*[/de]\s*(\d+)', texto, re.IGNORECASE)
+            if match:
+                total_pages = int(match.group(2))
+                print(f"Progresso: {current_page}/{total_pages}")
+                if current_page >= total_pages:
+                    print("Ultima pagina alcancada. Finalizando.")
+                    break
         except:
-            print("Não foi possível recuperar. Finalizando.")
+            pass
+        
+        # Aguarda avanco manual da pagina
+        if not aguardar_avanco_manual(driver, current_page):
             break
+        
+        pagina_atual = current_page
+    else:
+        print("Nao foi possivel detectar numero da pagina. Aguardando avanco manual...")
+        if not aguardar_avanco_manual(driver, pagina_atual):
+            break
+        pagina_atual += 1
 
-df = pd.DataFrame(dados, columns=[
-    "OS",
-    "Cliente",
-    "Vendedor",
-    "Data Abertura",
-    "Defeito",
-    "Equipamento",
-    "OBS"
-])
+# Salva os dados finais ao encerrar (seja por ESC ou conclusao)
+if encerrar_solicitado:
+    print("\nEncerramento solicitado via ESC. Salvando dados...")
+    salvar_dados(dados, pagina_atual, "os_extraidas_esc.xlsx")
+else:
+    print("\nColeta concluida. Salvando dados finais...")
+    salvar_dados(dados, pagina_atual, "os_extraidas.xlsx")
 
-print(f"\nTotal de registros extraídos: {len(df)}")
-print(df)
-
-df.to_excel("os_extraidas.xlsx", index=False)
-print(f"\nDados salvos em 'os_extraidas.xlsx'")
+print(f"\nTotal de registros extraidos: {len(dados)}")
+print("Processo finalizado.")
 
 driver.quit()
